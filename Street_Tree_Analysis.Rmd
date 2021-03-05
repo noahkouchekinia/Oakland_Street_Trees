@@ -1,0 +1,442 @@
+---
+title: "Oakland Street Trees"
+author: "Noah Kouchekinia"
+date: "Written 2018-06-01, Updated 2021-03-04"
+output: 
+  html_document:
+    theme: default
+    highligh: haddock
+    toc: true
+    toc_float: 
+      collapsed: false
+---
+
+# Introduction
+
+This document analyzes the 2006 Oakland Street Tree Survey, using R. All code and outputs are shows. This code and analysis is taken from an ongoing project for a data analytic class in the LSE statistics department. This document is published online at: https://rpubs.com/noahk/Trees. 
+
+The Street Tree Survey survey collected data from on 42661 municipally maintained street side trees across the city of Oakland. The data-set contains a broad ranch of tree characteristics, including species, precise location, and surrounding features. This analysis was drawn from  an ongoing project for a data analytic class in the LSE statistics department. 
+
+***
+
+# Set Up
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = '/home/noah/Documents/Code Samples/Street_Trees' )
+knitr::opts_chunk$set(comment=NA, fig.width=10, fig.align = 'center')
+```
+
+## Preparing R Session
+
+```{r message=FALSE, warning=FALSE}
+setwd("/home/noah/Documents/Code Samples/Street_Trees/")
+  
+library(tidyr); library(dplyr) #Data manipulation 
+library(tree); library(lattice); library(caret) #For predictive modeling
+library(tigris); library(rgdal); library(sp); library(raster); library(rgeos) #Spatial Data 
+library(ggplot2); library(plotly); library(leaflet); library(RColorBrewer) #Data visualization 
+library(taxize) #Manages calls to taxonomy API
+```
+
+## Loading Street Tree Data
+
+I read the data into R from a flat file. The data-set is available at at: https://data.oaklandnet.com/dataset/Street-Trees/9e7e-63pp
+
+```{r echo=TRUE}
+trees <- read.csv("./Data/TreesAlongSidewalks.csv")
+```
+
+## Cleaning and Recoding the Data
+
+The data-set needs some cleaning and recording to be usable. This is done below. 
+
+```{r}
+#Five entries contain mostly mostly values
+  trees <- trees[complete.cases(trees[1:30]),]
+
+#The longitude and latitude of each tree needs to be pulled out of "the_geom" variable (using regex)
+  trees$lng <- sub(" .*","",sub('POINT \\(','', trees$the_geom))
+  trees$lng <-as.numeric(trees$lng)
+    
+  trees$lat <- sub("\\)","",sub('POINT \\(.* ','', trees$the_geom))
+  trees$lat <- as.numeric(trees$lat)
+    
+  trees$the_geom <- NULL
+    
+#Many binary factor variables are missrepresented as numbers
+  trees$PLANAREAID <- as.factor(trees$PLANAREAID)
+  trees$COUNCILDIS <- as.factor(trees$COUNCILDIS)
+  trees$SURVEYOR   <- as.factor(trees$SURVEYOR)
+
+  trees$TREE        <- as.factor(ifelse(trees$TREE        == -1, "YES","NO"))
+  trees$WELL        <- as.factor(ifelse(trees$WELL        == -1, "YES","NO"))
+  trees$HVW         <- as.factor(ifelse(trees$HVW         == -1, "YES","NO"))
+  trees$STUMP       <- as.factor(ifelse(trees$STUMP       == -1, "YES","NO"))
+  trees$BRKNHNGLMB  <- as.factor(ifelse(trees$BRKNHNGLMB  == -1, "YES","NO"))
+  trees$OPENCAVITY  <- as.factor(ifelse(trees$OPENCAVITY  == -1, "YES","NO"))
+  trees$STRCTRCNT   <- as.factor(ifelse(trees$STRCTRCNT   == -1, "YES","NO"))
+  trees$WATERMET    <- as.factor(ifelse(trees$WATERMET    == -1, "YES","NO"))
+  trees$FIREHYD     <- as.factor(ifelse(trees$FIREHYD     == -1, "YES","NO"))
+  trees$DRIVEWAY    <- as.factor(ifelse(trees$DRIVEWAY    == -1, 'Yes','No'))
+  trees$LIGHTPOLE   <- as.factor(ifelse(trees$LIGHTPOLE   == -1, 'Yes','No'))
+  trees$STRTCRNR    <- as.factor(ifelse(trees$STRTCRNR    == -1, 'Yes','No'))
+  trees$STAKEGUARD  <- as.factor(ifelse(trees$STAKEGUARD  == -1, 'Yes','No'))
+  trees$DEAD        <- as.factor(ifelse(trees$DEAD       == -1, 'Yes','No'))
+    
+#date and time collumns need to be coded as such
+  trees$COLLDATE <- as.Date(as.character(trees$COLLDATE), format = "%m/%d/%Y")
+  trees$COLLTIME <- as.Date(as.character(trees$COLLTIME), format = "%H:%M:%S")
+    
+  trees$ARB_DATE <- as.Date(as.character(trees$ARB_DATE), format = "%m/%d/%Y")
+  trees$ARB_TIME <- as.Date(as.character(trees$ARB_TIME), format = "h:m:s")
+
+#The content of the species collumn is used inconsistantly. I split it into other variables.
+  not_tree <- c('Other','TBD','Dead', 'Stump', 'Unknown', 'Tree well only')
+  trees$SPECIES[trees$SPECIES %in% not_tree] <- NA
+    
+  not_species <- c('Fig Tree','Fruit tree','Queen Palm','Guava','Banana',
+                     'Walnut tree', 'Almond tree', 'Apricot tree', 'Shrub')
+  trees$COLLOQIALNAME <- ifelse(trees$SPECIES %in% not_species, trees$SPECIES, NA)
+  trees$SPECIES[trees$SPECIES %in% not_species] <- NA
+    
+  trees$GENUS <- sub('\\s.*', '', trees$SPECIES)
+  trees$GENUS[trees$GENUS == ''] <- NA
+  trees$GENUS <- as.factor(trees$GENUS)
+    
+  trees$SPECIES <- sub('^\\w*\\s(\\w*).*', '\\1', trees$SPECIES)
+  trees$SPECIES[trees$SPECIES == 'sp'] <- NA
+  
+  rm(not_species); rm(not_tree)
+    
+#Many variables are unhelpful
+  trees$SEGMENTID  <- NULL  #Cannot find deffinition
+  trees$LOCATION   <- NULL  #Poorly defined
+  trees$TRUNKDIAM  <- NULL  #Redundant (See TRUNKDIA_N)
+  trees$TREE_KEY   <- NULL  #Redundant (See COLLDATE and COLLTIME)
+  trees$ADDRNUM    <- NULL  #Cannot find deffinition
+  trees$SYM_CODE   <- NULL  #Cannot find deffinition
+  trees$FACILITYID <- NULL  #Redundant (See OBJECTID)
+  trees$LEGACYID   <- NULL  #Redundant (See OBJECTID)
+  trees$WARRANTYDA <- NULL  #Every entry is NA
+  trees$INSTALLDAT <- NULL  #Every entry is NA
+  trees$INSTALL_ID <- NULL  #Every entry is NA
+  trees$DESIGNATIO <- NULL  #Mostly empty
+  trees$CONDITION  <- NULL  #Almost entirely empty
+  trees$CONDITIOND <- NULL  #Entirely Empty
+
+#The arborist comments make more sense as charecter strings than factors
+  trees$ARB_CMNT <- as.character(trees$ARB_CMNT)
+  trees$ARB_CMNT[trees$ARB_CMNT=="None"] <- NA
+    
+#The IS_PROBLEM collumn hold information on wether a free is a current problem, past problem,
+#or never a problem. I want a binary variable that stores wether a tree was ever a problem.
+    trees$WAS_PROBLEM <- as.factor(ifelse(trees$IS_PROBLEM == "False", "NO", 
+                                   ifelse(trees$IS_PROBLEM %in% c('Fixed','true'),'YES', NA)))
+```
+
+The data-set is now much cleaner, and consistently formatted. And Ready for further analysis. 
+
+***
+
+# Street Tree Taxonomy
+
+The data-set contains genus and species data for most observations. More detailed taxonomic information upstream taxonomic information (family, order class, etc.) would be would be useful. First, more detailed classification information provides a way to measure the similarity between the trees in the data-set. Secondly, it will make incorporating taxonomic information into predictive models feasible. Using species or genus as a factor variable in a decision-tree or regression model would be impractical given the enormous number of dummy variables this would require. A better approach would be to use a higher level of classification, at least in initial models. 
+
+###Collecting Taxonomy Data
+
+The `taxize` package provides a function that handles calls for classification information from the Catalog of Life API.
+
+```{r, eval = F}
+trees_tax <- classification(sci_id = unique(trees$genus), db = "ncbi")
+```
+
+```{r, include = F}
+load("./Data/trees_tax.RData") #Stored results from the API calls, for speed.
+```
+
+The `taxize::classification` function returns its results as a list of data-frames. Below, the list is reorganized into a single data-frame.
+
+```{r}
+trees_tax   <- trees_tax[! is.na(trees_tax)]
+
+trees_tax  <- lapply(trees_tax, function(x){x[c('rank','name')]})
+trees_tax  <- lapply(trees_tax, function(x){pivot_wider(x, names_from = 'rank', values_from = 'name')})
+trees_tax  <- lapply(trees_tax, function(x){x[c('kingdom','phylum','class','order','family','genus')]})
+trees_tax  <- do.call(rbind, trees_tax)
+
+trees_tax <- trees_tax[trees_tax$kingdom == 'Plantae',]
+```
+
+The tree taxonomic information can now be paired with the original street tree data-set. Now observation contains the tree's full taxonomic classification. 
+
+```{r}
+trees <- merge(trees_tax, trees, by.x = 'genus', by.y = 'GENUS', all.y = TRUE)
+
+trees$SPECIES[!is.na(trees$kingdom)] <- paste(trees$genus[!is.na(trees$kingdom)], 
+                                               ifelse(is.na(trees$SPECIES[!is.na(trees$kingdom)]), 
+                                               "Unknown", 
+                                                trees$SPECIES[!is.na(trees$kingdom)]))
+
+rm(trees_tax)
+```
+
+## Visualizing Taxonomic Classification
+
+It would be interesting to visualize the newly loaded taxonomic information. Below, A layered pie chart is created which will show which species, genuses, families, etc. are most common in Oakland's street trees. 
+
+```{r,fig.height= 6}
+#Extract the relevant taxonomic information from the data
+  trees_tax <- trees[c('kingdom','phylum','class','order','family','genus','SPECIES')]
+  trees_tax <- trees_tax[!is.na(trees_tax$kingdom),]
+
+#Reorder data
+  trees_tax <- trees_tax[order(trees_tax$kingdom,
+                               trees_tax$phylum,
+                               trees_tax$class,
+                               trees_tax$order,
+                               trees_tax$family,
+                               trees_tax$genus, 
+                               trees_tax$SPECIES),
+                        ]
+
+#Define a palette
+  palMaker <- colorRampPalette(colors = c('gold', 'dark green', 'dark green', "brown", 'brown','gold'))
+  pal <- palMaker(nrow(trees_tax)+10)
+  
+#Assign color to each observation
+  trees_tax$color <- 1:nrow(trees_tax)
+
+#Build plot with plotly
+  p <- plot_ly(textinfo = 'none')
+  
+#Each layer is added inside a for loop  
+  for(i in 1:7){
+    #Extract relevent data for layer and reshape
+      data  <- dplyr::grouped_df(trees_tax, vars = names(trees_tax)[i]) 
+      data  <- summarize(data, count = length(color), color = mean(color))
+      data  <- data[order(data$color),]
+      names(data)[1] <- 'var'
+      
+    #Determin appropriate dimentions for layer
+      hole <-1-(1/i)
+      diam <- i*.14 
+      rad <- diam/2
+      domain <- list(x=list(.5-rad, .5+rad), y=list(.5-rad, .5+rad))
+    
+    #Build layer
+      p <- add_pie(p, 
+                   values = data$count, 
+                   labels = data$var, 
+                   hole = hole, 
+                   domain = domain, 
+                   sort = FALSE,
+                   hoverinfo = 'text',
+                   text = paste0(tools::toTitleCase(tolower(names(trees_tax)[i])),": ",tools::toTitleCase(data$var),'\n',
+                                 as.character(data$count), " Street Trees \n",
+                                 as.character(round(100*(data$count/nrow(trees_tax)), digits = 3)),"%"),
+                   marker = list(colors = pal[round(data$color)],
+                                 line = list(color = 'white', width = (.04*(10-i)^1.8))
+                                 )
+                   ) 
+   }
+
+#remove unessesary objects
+  rm(list = c('data', 'hole', 'diam', 'rad', 'domain', 'trees_tax'))
+
+#set layour and configuration parameters
+p <- layout(p, title = 'Oakland Street Tree Taxonomy: Layered Pie Chart',  showlegend = F, autosize = T,
+                  xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+                  yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
+p <- config(p, displaylogo = FALSE, collaborate = FALSE, displayModeBar = F)
+
+#Display the Chart!
+p
+```
+
+***
+
+# Mapping Trees 
+
+Since the data-set contains precise coordinates for each tree, we can map them. Below, two kinds of maps are created. 
+
+## Mapping Individual Trees
+
+The first map will be an interactive scatter plot of every street tree in the city.
+
+```{r echo=TRUE}
+#Let's make a scatter map of all the trees
+    m <- leaflet(width = '100%')
+    m <- addProviderTiles(m,providers$CartoDB.Positron)
+    m  <- addCircleMarkers(m, data = trees,
+                           lng = ~lng, lat = ~lat, 
+                           radius = 11, color = "#009933",opacity = .75, fillOpacity = .75,
+                           label = paste("Species: ", trees$GENUS, trees$SPECIES),
+                           clusterOptions = markerClusterOptions(showCoverageOnHover = FALSE)
+                              #^The clustering makes the widget run efficently
+                           )
+#Display the map!
+    m
+```
+
+## Mapping Tree Density
+
+I would like to determine the density of street trees in Oakland's various neighborhoods. This allows us to pair trees with information about the neighborhoods they are in, fertile ground for future analysis. In the short term, this will be used to create a neighborhood level chloroplast map of tree density. 
+
+### Geographic Boundry Data
+
+The first step is to load geospatial data into R. Census tracts will be used as neighborhoods, so the `tigris` packages `tracts` function is used to download the county's census tract boundaries from the Census Bureau's Tiger Database. 
+
+A shape file of the Oakland's city limits, and a shape file of the coast of the San Francisco Bay are downloaded. These were retrieved from UC Berkeley's Geo-spatial Database.
+
+```{r display, include=FALSE}
+tracts  <- tigris::tracts("Ca", county = "Alameda", year = 2018, class = "sp")
+
+cities  <- rgdal::readOGR("./Shapefiles/alameda_cities/", "alameda_cities")
+Oakland <- cities[cities$name == "Oakland",]
+Oakland <-spTransform(Oakland, tracts@proj4string@projargs)
+
+bay     <- rgdal::readOGR("./Shapefiles/bay_boundry/", "GIS_ADMIN_OCEAN_BAY")
+bay     <- spTransform(bay, Oakland@proj4string@projargs)
+
+rm(cities)
+```
+
+
+```{r Neighborhood Data, eval = FALSE}
+#First, lets import geospacial data (city and tract boundries)
+  tracts  <- tigris::tracts("Ca", county = "Alameda", year = 2018, class = "sp")
+
+  cities  <- rgdal::readOGR("./alameda_cities/", "alameda_cities")
+  Oakland <- cities[cities$name == "Oakland",]
+  rm(cities)
+  Oakland <-spTransform(Oakland, tracts@proj4string@projargs)
+
+  bay     <- rgdal::readOGR("./bay_boundry/", "GIS_ADMIN_OCEAN_BAY")
+  bay     <- spTransform(bay, Oakland@proj4string@projargs)
+```
+
+The census tract boundary data is then then cropped so that it just includes tracts within the city of Oakland, and only the portion of those tracts on land. 
+
+```{r}
+Oakland <- (Oakland - crop(Oakland,bay, snap = 'out')) #Stage 1: crop Oakland City limits by coastal boundry
+tracts <- crop(tracts, Oakland, snap = 'out') #Stage 2: crop tracts by Oaland City limits
+    tracts <- tracts[! area(tracts) < 10000,] #Due to border discrepencies, slivers of non-oakland were retained after crop
+                                              #This removes those tiny protions of tracts
+
+rm(bay); rm(Oakland)
+```
+
+### Measuring Tree Density
+
+Each tree can now be associated with the neighborhood it is within. 
+
+```{r echo=TRUE}
+#First, lets add which tract each tree is in to the 'trees' dataframe
+   trees$tract <- vector(mode = 'numeric',  dim(trees)[1])
+    for(i in 1:length(tracts@polygons)){
+      includes <- point.in.polygon(trees$lng,                                     
+                                   trees$lat,
+                                   tracts@polygons[[i]]@Polygons[[1]]@coords[,1], 
+                                   tracts@polygons[[i]]@Polygons[[1]]@coords[,2])
+      trees$tract[includes == 1] <- i
+    }
+  trees$tract[trees$tract == 0] <- NA
+  
+#Now we can add how many trees are in each tract to our 'tracts' spacial dataframe 
+    tracts@data$Trees <- tabulate(trees$tract)
+    tracts@data$TreeDensity <- tracts@data$Trees / as.numeric(tracts@data$ALAND)
+```
+
+### Tree Density Cloropleth
+
+Finally, below is a map showing the relative density of trees in different sections of Oakland. 
+
+```{r}
+#Lets create a palette
+  pal <- colorNumeric(
+      palette = "Greens",
+      domain = tracts@data$TreeDensity)
+
+#Lets build the map 
+    m <- leaflet(width = '100%')
+    m <-  addProviderTiles(m,providers$CartoDB.Positron)
+    m <- addPolygons(m, 
+                     data = tracts,
+                    fillColor = ~pal(TreeDensity),
+                    weight = 2,
+                    opacity = 1,
+                    color = "grey",
+                    dashArray = "3",
+                    fillOpacity = 0.7,
+                    highlight = highlightOptions(
+                                  weight = 2,
+                                  color = "white",
+                                  dashArray = "3",
+                                  fillOpacity = 0.75,
+                                  bringToFront = TRUE) 
+                    #^Highlight options make neighborhood boundies more cclear on hover
+                    )
+#Display the map!
+    m
+```
+
+***
+
+# Predicting Problem Trees
+
+The data-set contains information on which trees have been problems. Based on the variables correlation with other factors, it appears a tree is marked as a problem tree if it has excessive deadwood or is otherwise unhealthy. To help the city divert its tree management resources to were they will matter the most, it would be useful to predict which trees will be problem trees. Below, two models are constructed to do just that. 
+
+## Classification Tree Model
+
+First up, a classification *tree* (ba dum tss). 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+#Lets build a tree model
+#Variables are selected as inclusivly as possible, since the function picks which to use. 
+  model_1 <- tree(WAS_PROBLEM ~ as.factor(order) + PLANAREAID + SURVEYOR + COLLDATE + TREE + WELL + WELLWIDTH + LOWWELL + 
+                                HVW + STUMP + BRKNHNGLMB + OPENCAVITY + STRCTRCNT + LOWLIMB + TRNKLEAN + GRATE + 
+                                STAKEGUARD + LANDUSE + TRUNKDIA_N,
+                  data = trees)
+
+#Let's use K-fold cross validation to select the minimum optimal size for the tree
+  cv.results <- cv.tree(model_1, K = 10,method = 'misclass')
+  optimal.size <- min(cv.results$size[cv.results$dev == min(cv.results$dev)])
+  model_1 <- prune.tree(model_1, best = optimal.size)
+
+#Lets take a look at the tree. 
+summary(model_1)
+plot(model_1)
+text(model_1)
+
+#Lets identify the at risk from the tree above orders.
+levels(as.factor(trees$order))[which(letters %in% c('c','d','g','o'))]
+```
+
+The above model predicts that trees in the orders of Arecales, Asparagales, Ericales, and Malpighiales will become problem trees while the others will not. The misclassification rate on the training data is about 2%. Since K-fold cross validation was used to prune the model, it is expected that performance would be similar on new data. 
+
+## Logistic Regression Model
+
+Next, a logistic regression model is fitted using the same predictors that the tree function used. It is trained using K-fold cross validation to prevent over fitting. 
+
+```{r}
+model2 <- caret::train(WAS_PROBLEM ~ order, 
+                       data = trees,
+                       trControl = trainControl(method = 'cv', number = 10),
+                       method = 'glm',
+                       family=binomial(link = "logit"),
+                       metric = "Accuracy",
+                       na.action = na.omit
+                       )
+
+summary(model2)
+```
+
+The results from the second model are similar to the results of the first. Four orders of trees have higher log odds of becoming problem trees (at a significance level of .1 or below). They are in fact the same four orders of trees that the previous model predicted would be problem trees: Arecales, Asparagales, Ericales, and Malpighiales. This consistency is reassuring. 
+
+The regression model however gives more detailed results than the classification tree model. For example, this model also reveals that two orders of trees, Saxifragales and Proteales, are less likely to be problem trees (again, at a significance level of .1 or below). Since the logistic regression also returns the log odds ratios, one can determine the relative magnitude of trees probabilities of becoming problem trees. For example, also trees of the order Arecales and Asparagales are both more likely than others to become problem trees, trees of order Asparagales are more likely than trees of order Arecales to become problem trees. 
+
+
+# Conclusion
+
+Most of the information in the data-set was not helpful in predicting which trees would be problem trees. The exception is the taxonomic information collected in the survey. Both models consistently show that trees of the orders Arecales, Asparagales, Ericales, and Malpighiales are likely to become problem trees. This could have policy implications for the city of Oakland. Perhaps it should plant less of these trees, and trees in the orders predicted to not be problem trees, Saxifragales and Proteales. Alternatively, the city could channel limited monitoring and trimming resources towards trees in the problematic orders. 
