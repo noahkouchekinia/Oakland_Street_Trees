@@ -5,7 +5,7 @@ This directory analyzes Oakland's street trees. First, it visualizes the taxonom
 
 **./Street_Tree_Analysis.html** is the formatted/published version of **./Street_Tree_Analysis.Rmd**.
 
-**./index.html** is a copy of **./Street_Tree_Analysis.html**, renamed such that GitHub Pages recognizes and displays it [here](https://noahkouchekinia.github.io/Street_Trees/).
+**./index.html** is a copy of **./Street_Tree_Analysis.html**, renamed such that GitHub Pages recognizes and displays it [here](https://noahkouchekinia.github.io/Oakland_Street_Trees/).
 
 **./publish.R** a utility script to process  **./Street_Tree_Analysis.Rmd** into **./Street_Tree_Analysis.html** and **./index.html**.
 
