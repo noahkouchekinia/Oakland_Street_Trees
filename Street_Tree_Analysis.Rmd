@@ -13,9 +13,7 @@ output:
 
 # Introduction
 
-This document analyzes the 2006 Oakland Street Tree Survey, using R. All code and outputs are shows. This code and analysis is taken from an ongoing project for a data analytic class in the LSE statistics department. This document is published online at: https://rpubs.com/noahk/Trees. 
-
-The Street Tree Survey survey collected data from on 42661 municipally maintained street side trees across the city of Oakland. The data-set contains a broad ranch of tree characteristics, including species, precise location, and surrounding features. This analysis was drawn from  an ongoing project for a data analytic class in the LSE statistics department. 
+This document analyzes the 2006 Oakland Street Tree Survey, using R. All code and outputs are shows. This code and analysis is taken from an ongoing project for a data analytic class in the LSE statistics department. The code and data is available at: https://github.com/noahkouchekinia/Oakland_Street_Trees[https://github.com/noahkouchekinia/Oakland_Street_Trees]
 
 ***
 
